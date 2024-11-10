@@ -7,31 +7,11 @@ from sqlalchemy.orm import sessionmaker, Session
 from datetime import datetime
 import logging
 from typing import List, Optional
-from .database import engine, Base
-from .models import *
-
-# 모델 정의
-class APIKeys(Base):
-    __tablename__ = "api_keys"
-    id = Column(Integer, primary_key=True, index=True)
-    key = Column(String, unique=True, index=True)
-    user_id = Column(String)
-    created_at = Column(DateTime, default=datetime.utcnow)
-    is_active = Column(Integer, default=1)
-
-class Anime(Base):
-    __tablename__ = "anime"
-    id = Column(Integer, primary_key=True, index=True)
-    title = Column(String, index=True)
-    genre = Column(String)
-    aired_date = Column(DateTime)
-    synopsis = Column(String)
-    studio = Column(String)
-    episodes = Column(Integer)
-    rating = Column(Float)
-    image_url = Column(String)
+from . import models
+from .database import SessionLocal, engine, Base
 
 app = FastAPI(title="Zooda API")
+
 
 # CORS 설정
 app.add_middleware(
@@ -42,10 +22,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# 시작 시 테이블 생성
-@app.on_event("startup")
-async def startup():
-    Base.metadata.create_all(bind=engine)
+# 테이블 생성
+Base.metadata.create_all(bind=engine)
+
 
 # 데이터베이스 의존성
 def get_db():
@@ -55,64 +34,55 @@ def get_db():
     finally:
         db.close()
 
-# API 키 검증 - 간단화된 버전
-def validate_api_key(request: Request, db: Session = Depends(get_db)):
-    api_key = request.query_params.get('key')
-    if not api_key:
-        raise HTTPException(status_code=401, detail="API key is required")
-
-    key_record = db.query(APIKeys).filter(
-        APIKeys.key == api_key,
-        APIKeys.is_active == 1
+# API 키 검증
+def verify_api_key(key: str, db: Session = Depends(get_db)):
+    api_key = db.query(models.APIKeys).filter(
+        models.APIKeys.key == key,
+        models.APIKeys.is_active == 1
     ).first()
-
-    if not key_record:
+    if not api_key:
         raise HTTPException(status_code=401, detail="Invalid or inactive API key")
-    
     return api_key
 
-# 엔드포인트
+# 라우트
 @app.get("/")
 async def read_root():
     return {"message": "Welcome to Zooda API"}
 
 @app.get("/anime")
 async def get_anime_list(
-    db: Session = Depends(get_db),
-    api_key: str = Depends(validate_api_key),
+    key: str,
     skip: int = 0,
-    limit: int = 10
+    limit: int = 10,
+    db: Session = Depends(get_db)
 ):
-    anime_list = db.query(Anime).offset(skip).limit(limit).all()
-    total = db.query(Anime).count()
-    return {
-        "total": total,
-        "data": anime_list,
-        "page": skip // limit + 1 if limit > 0 else 1,
-        "pages": (total + limit - 1) // limit if limit > 0 else 1
-    }
+    verify_api_key(key, db)
+    anime_list = db.query(models.Anime).offset(skip).limit(limit).all()
+    return {"data": anime_list, "total": db.query(models.Anime).count()}
 
 @app.get("/anime/search")
 async def search_anime(
-    db: Session = Depends(get_db),
-    api_key: str = Depends(validate_api_key),
-    title: Optional[str] = None,
-    genre: Optional[str] = None
+    key: str,
+    title: str = None,
+    genre: str = None,
+    db: Session = Depends(get_db)
 ):
-    query = db.query(Anime)
+    verify_api_key(key, db)
+    query = db.query(models.Anime)
     if title:
-        query = query.filter(Anime.title.ilike(f"%{title}%"))
+        query = query.filter(models.Anime.title.ilike(f"%{title}%"))
     if genre:
-        query = query.filter(Anime.genre.ilike(f"%{genre}%"))
+        query = query.filter(models.Anime.genre.ilike(f"%{genre}%"))
     return query.all()
 
 @app.get("/anime/{anime_id}")
-async def get_anime_detail(
+async def get_anime(
     anime_id: int,
-    db: Session = Depends(get_db),
-    api_key: str = Depends(validate_api_key)
+    key: str,
+    db: Session = Depends(get_db)
 ):
-    anime = db.query(Anime).filter(Anime.id == anime_id).first()
+    verify_api_key(key, db)
+    anime = db.query(models.Anime).filter(models.Anime.id == anime_id).first()
     if not anime:
         raise HTTPException(status_code=404, detail="Anime not found")
     return anime
@@ -215,9 +185,6 @@ async def clear_database(db: Session = Depends(get_db)):
 
 if __name__ == "__main__":
     import uvicorn
-    
-    # 데이터베이스 테이블 생성
-    Base.metadata.create_all(bind=engine)
     
     # 서버 실행
     uvicorn.run(app, host="0.0.0.0", port=8000)
