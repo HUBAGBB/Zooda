@@ -10,12 +10,6 @@ from typing import List, Optional
 from .database import engine, Base
 from .models import *
 
-# 데이터베이스 설정
-DATABASE_URL = "sqlite:///./zooda.db"
-engine = create_engine(DATABASE_URL)
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-Base = declarative_base()
-
 # 모델 정의
 class APIKeys(Base):
     __tablename__ = "api_keys"
@@ -48,6 +42,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# 시작 시 테이블 생성
 @app.on_event("startup")
 async def startup():
     Base.metadata.create_all(bind=engine)
